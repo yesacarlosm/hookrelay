@@ -1,0 +1,26 @@
+# Build output
+/target
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Claude Code local settings (shared config in .claude/ stays tracked)
+.claude/settings.local.json
+
+# direnv (holds the gh token)
+.envrc
+.direnv/
