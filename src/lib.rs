@@ -6,4 +6,4 @@ pub mod error;
 pub mod routes;
 pub mod verify;
 
-pub use routes::router;
+pub use routes::{AppState, router};

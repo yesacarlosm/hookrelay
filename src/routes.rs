@@ -1,12 +1,13 @@
 use std::{
     collections::BTreeMap,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{FromRef, Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
@@ -15,20 +16,43 @@ use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use crate::{
+    config::Config,
     db::{self, Hook},
     error::AppError,
+    verify,
 };
 
 const DEFAULT_LIST_LIMIT: i64 = 50;
 const MAX_LIST_LIMIT: i64 = 500;
 
-pub fn router(pool: SqlitePool) -> Router {
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub config: Arc<Config>,
+}
+
+impl AppState {
+    pub fn new(pool: SqlitePool, config: Config) -> Self {
+        Self {
+            pool,
+            config: Arc::new(config),
+        }
+    }
+}
+
+impl FromRef<AppState> for SqlitePool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/hooks", get(list_hooks))
         .route("/hooks/{source}", post(receive_hook))
         .route("/hooks/id/{id}", get(get_hook))
-        .with_state(pool)
+        .with_state(state)
 }
 
 async fn health() -> &'static str {
@@ -36,7 +60,7 @@ async fn health() -> &'static str {
 }
 
 async fn receive_hook(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
     Path(source): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -47,12 +71,31 @@ async fn receive_hook(
         ));
     }
 
+    let received_at_ms = now_ms();
+    if let Some(verified) = state.config.source(&source) {
+        let header = headers
+            .get(verified.scheme.header_name())
+            .and_then(|value| value.to_str().ok());
+        verify::verify(
+            verified.scheme,
+            verified.secret.expose(),
+            header,
+            &body,
+            received_at_ms / 1000,
+            state.config.stripe_tolerance,
+        )
+        .map_err(|reason| {
+            tracing::warn!(%source, %reason, "rejected webhook with invalid signature");
+            AppError::Unauthorized
+        })?;
+    }
+
     let headers: BTreeMap<String, String> = headers
         .iter()
         .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
         .collect();
 
-    let id = db::insert_hook(&pool, &source, now_ms(), &headers, &body).await?;
+    let id = db::insert_hook(&state.pool, &source, received_at_ms, &headers, &body).await?;
     tracing::info!(id, %source, bytes = body.len(), "hook received");
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }

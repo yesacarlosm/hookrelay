@@ -3,13 +3,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use hookrelay::{AppState, config::Config};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
 async fn app() -> Router {
     let pool = hookrelay::db::connect("sqlite::memory:").await.unwrap();
-    hookrelay::router(pool)
+    hookrelay::router(AppState::new(pool, Config::default()))
 }
 
 async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
