@@ -28,7 +28,11 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 ## Layout
 - `src/main.rs`: clap CLI (`serve`), tracing setup, graceful shutdown.
 - `src/lib.rs`: exports `router()` so integration tests can drive the app in-process.
-- `src/routes.rs`: axum 0.8 handlers (path syntax is `/{param}`, not `/:param`).
+- `src/routes.rs`: axum 0.8 handlers (path syntax is `/{param}`, not `/:param`). Router
+  state is `AppState { pool, config: Arc<Config> }`; `SqlitePool` is extractable via `FromRef`.
+- `src/verify.rs`: pure HMAC-SHA256 verification (`Scheme::{Github, Stripe}`), no axum types.
+- `src/config.rs`: `Config::from_vars` reads `HOOKRELAY_SECRET_<SOURCE>` /
+  `HOOKRELAY_SCHEME_<SOURCE>`; `Secret` has a redacted `Debug`. Ambiguous config fails at startup.
 - `src/db.rs`: sqlx + SQLite with runtime queries (no `query!` macros, so no `DATABASE_URL`
   needed to build). Schema is created in `migrate()`; move to `sqlx::migrate!` once the
   schema has more than one table.
@@ -40,7 +44,7 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 2. v0.2: HMAC-SHA256 signature verification (`hmac`, `sha2`, constant-time compare via
    `Mac::verify_slice`). GitHub: `X-Hub-Signature-256: sha256=<hex>`. Stripe:
    `Stripe-Signature: t=<ts>,v1=<hex>` over `"{t}.{body}"` with a timestamp tolerance.
-   Per-source secrets from config/env.
+   Per-source secrets from config/env. ✅
 3. v0.3: forwarding with `reqwest`, exponential backoff with jitter, dead-letter table.
 4. v0.4: replay endpoint and `list`/`replay` CLI subcommands.
 5. Dockerfile + release workflow.
