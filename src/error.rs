@@ -11,6 +11,8 @@ pub enum AppError {
     NotFound,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("invalid or missing signature")]
+    Unauthorized,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -20,6 +22,7 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Database(err) => {
                 tracing::error!(error = %err, "database error");
                 StatusCode::INTERNAL_SERVER_ERROR
