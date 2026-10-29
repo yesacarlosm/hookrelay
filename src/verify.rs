@@ -201,6 +201,12 @@ mod tests {
         }
 
         #[test]
+        fn rejects_empty_signature() {
+            let result = verify_github(SECRET, "sha256=", BODY);
+            assert_eq!(result, Err(VerifyError::Mismatch));
+        }
+
+        #[test]
         fn rejects_missing_header() {
             let result = verify(Scheme::Github, SECRET, None, BODY, 0, Duration::ZERO);
             assert_eq!(result, Err(VerifyError::Missing));
@@ -291,6 +297,12 @@ mod tests {
             let bogus = "0".repeat(64);
             let header = format!("t={NOW},v1={bogus},v1={bogus}");
             let result = check(&header, BODY);
+            assert_eq!(result, Err(VerifyError::Mismatch));
+        }
+
+        #[test]
+        fn rejects_empty_v1_signature() {
+            let result = check(&format!("t={NOW},v1="), BODY);
             assert_eq!(result, Err(VerifyError::Mismatch));
         }
 
