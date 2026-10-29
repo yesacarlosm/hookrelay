@@ -135,8 +135,9 @@ impl Config {
     }
 }
 
+/// The single canonical key used for both storage and lookup.
 fn normalize(source: &str) -> String {
-    source.replace('-', "_")
+    source.to_ascii_lowercase().replace('-', "_")
 }
 
 fn source_key(var: &str, suffix: &str) -> Result<String, ConfigError> {
@@ -195,6 +196,12 @@ mod tests {
         ])
         .unwrap();
         assert!(config.source("my-app").is_some());
+    }
+
+    #[test]
+    fn with_source_uses_the_same_canonical_key_as_lookup() {
+        let config = Config::default().with_source("My-App", Scheme::Github, "s");
+        assert!(config.source("my_app").is_some());
     }
 
     #[test]
