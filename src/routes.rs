@@ -5,6 +5,7 @@ use axum::{
     body::Bytes,
     extract::{FromRef, Path, Query, State},
     http::{HeaderMap, StatusCode},
+    middleware,
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -13,6 +14,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Notify;
 
 use crate::{
+    auth,
     config::Config,
     db::{self, Delivery, DeliveryStatus, Hook},
     error::AppError,
@@ -47,13 +49,21 @@ impl FromRef<AppState> for SqlitePool {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    // Everything that reads stored hooks or triggers deliveries. Providers posting hooks
+    // authenticate with signatures instead, so receiving stays outside.
+    let admin = Router::new()
         .route("/hooks", get(list_hooks))
-        .route("/hooks/{source}", post(receive_hook))
         .route("/hooks/id/{id}", get(get_hook))
         .route("/hooks/id/{id}/replay", post(replay_hook))
         .route("/deliveries", get(list_deliveries))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_admin,
+        ));
+    Router::new()
+        .route("/health", get(health))
+        .route("/hooks/{source}", post(receive_hook))
+        .merge(admin)
         .with_state(state)
 }
 

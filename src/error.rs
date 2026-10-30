@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde_json::json;
@@ -13,6 +13,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("invalid or missing signature")]
     Unauthorized,
+    #[error("invalid or missing admin token")]
+    AdminUnauthorized,
     #[error("{0}")]
     Conflict(String),
     #[error(transparent)]
@@ -24,7 +26,7 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::Unauthorized | AppError::AdminUnauthorized => StatusCode::UNAUTHORIZED,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Database(err) => {
                 tracing::error!(error = %err, "database error");
@@ -36,6 +38,13 @@ impl IntoResponse for AppError {
             AppError::Database(_) => "internal error".to_string(),
             other => other.to_string(),
         };
-        (status, Json(json!({ "error": message }))).into_response()
+        let mut response = (status, Json(json!({ "error": message }))).into_response();
+        if matches!(self, AppError::AdminUnauthorized) {
+            response.headers_mut().insert(
+                header::WWW_AUTHENTICATE,
+                header::HeaderValue::from_static("Bearer"),
+            );
+        }
+        response
     }
 }
