@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -14,12 +10,13 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
+use tokio::sync::Notify;
 
 use crate::{
     config::Config,
     db::{self, Hook},
     error::AppError,
-    verify,
+    now_ms, verify,
 };
 
 const DEFAULT_LIST_LIMIT: i64 = 50;
@@ -29,6 +26,8 @@ const MAX_LIST_LIMIT: i64 = 500;
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
+    /// Notified when a delivery is queued; hand it to [`crate::forward::run`].
+    pub wake_forwarder: Arc<Notify>,
 }
 
 impl AppState {
@@ -36,6 +35,7 @@ impl AppState {
         Self {
             pool,
             config: Arc::new(config),
+            wake_forwarder: Arc::new(Notify::new()),
         }
     }
 }
@@ -106,6 +106,9 @@ async fn receive_hook(
     )
     .await?;
     tracing::info!(id, %source, bytes = body.len(), forward = target.is_some(), "hook received");
+    if target.is_some() {
+        state.wake_forwarder.notify_one();
+    }
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
@@ -142,13 +145,6 @@ fn is_valid_source(source: &str) -> bool {
         && source
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
