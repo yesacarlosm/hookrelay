@@ -24,11 +24,16 @@ const BATCH_SIZE: i64 = 32;
 /// Upper bound on how long the worker sleeps, as a safety net for missed wake-ups.
 const IDLE_POLL: Duration = Duration::from_secs(5);
 
-/// Hop-by-hop and framing headers that describe the original connection, not the hook.
+/// Headers that are never forwarded: hop-by-hop and framing headers describe the original
+/// connection, not the hook, and credentials or client identity added by a proxy in front
+/// of hookrelay were meant for hookrelay, not the target.
 const SKIPPED_HEADERS: &[&str] = &[
+    "authorization",
     "connection",
     "content-length",
+    "cookie",
     "expect",
+    "forwarded",
     "host",
     "keep-alive",
     "proxy-authorization",
@@ -37,7 +42,10 @@ const SKIPPED_HEADERS: &[&str] = &[
     "trailer",
     "transfer-encoding",
     "upgrade",
+    "x-real-ip",
 ];
+/// Prefixes of header families that are skipped for the same reasons.
+const SKIPPED_PREFIXES: &[&str] = &["x-forwarded-", "x-hookrelay-"];
 
 #[derive(Debug, Clone)]
 pub struct ForwardSettings {
@@ -279,7 +287,10 @@ fn forward_headers(delivery: &DueDelivery, attempt: i64) -> HeaderMap {
         .headers
         .iter()
         .filter(|(name, _)| {
-            !SKIPPED_HEADERS.contains(&name.as_str()) && !name.starts_with("x-hookrelay-")
+            !SKIPPED_HEADERS.contains(&name.as_str())
+                && !SKIPPED_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
         })
         .filter_map(|(name, value)| {
             Some((
@@ -361,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn forwards_original_headers_without_hop_by_hop_ones() {
+    fn forwards_original_headers_without_hop_by_hop_or_proxy_ones() {
         let delivery = DueDelivery {
             id: 1,
             hook_id: 42,
@@ -375,6 +386,12 @@ mod tests {
                     ("host", "relay.example.com"),
                     ("content-length", "2"),
                     ("connection", "keep-alive"),
+                    ("authorization", "Basic cmVsYXk6cGFzcw=="),
+                    ("cookie", "session=abc"),
+                    ("forwarded", "for=203.0.113.7"),
+                    ("x-forwarded-for", "203.0.113.7"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-real-ip", "203.0.113.7"),
                     ("x-hookrelay-hook-id", "spoofed"),
                 ]
                 .map(|(k, v)| (k.to_string(), v.to_string())),
@@ -387,7 +404,17 @@ mod tests {
         assert_eq!(headers["x-hookrelay-hook-id"], "42");
         assert_eq!(headers["x-hookrelay-attempt"], "2");
         assert_eq!(headers["x-hookrelay-source"], "github");
-        for skipped in ["host", "content-length", "connection"] {
+        for skipped in [
+            "host",
+            "content-length",
+            "connection",
+            "authorization",
+            "cookie",
+            "forwarded",
+            "x-forwarded-for",
+            "x-forwarded-proto",
+            "x-real-ip",
+        ] {
             assert!(!headers.contains_key(skipped), "{skipped}");
         }
         assert_eq!(headers.get_all("x-hookrelay-hook-id").iter().count(), 1);

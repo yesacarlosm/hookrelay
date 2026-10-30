@@ -90,7 +90,10 @@ curl -X POST localhost:8080/hooks/github -H 'x-hub-signature-256: sha256=00' -d 
 Set `HOOKRELAY_TARGET_<SOURCE>` to an `http(s)` URL to forward that source's hooks
 (`<SOURCE>` is written the same way as for secrets). Each stored hook is queued for
 delivery in the same transaction that stores it, and a background worker POSTs it to the
-target with the original body and headers (minus hop-by-hop ones like `Host`), plus:
+target with the original body and headers, plus the ones below. Hop-by-hop headers
+(`Host`, `Connection`, ...) are dropped, and so are credentials and client identity that a
+proxy in front of hookrelay may add (`Authorization`, `Cookie`, `Forwarded`,
+`X-Forwarded-*`, `X-Real-IP`), since those were meant for hookrelay, not the target.
 
 | Header                | Value                                   |
 |-----------------------|-----------------------------------------|
