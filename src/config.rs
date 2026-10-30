@@ -1,11 +1,14 @@
-//! Per-source verification settings, loaded from the environment at startup.
+//! Per-source verification and forwarding settings, loaded from the environment at startup.
 
 use std::{collections::HashMap, fmt, time::Duration};
+
+use reqwest::Url;
 
 use crate::verify::{DEFAULT_STRIPE_TOLERANCE, Scheme, UnknownScheme};
 
 pub const SECRET_PREFIX: &str = "HOOKRELAY_SECRET_";
 pub const SCHEME_PREFIX: &str = "HOOKRELAY_SCHEME_";
+pub const TARGET_PREFIX: &str = "HOOKRELAY_TARGET_";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -19,6 +22,9 @@ pub enum ConfigError {
     MissingScheme(String),
     #[error("{SCHEME_PREFIX}{upper} is set but {SECRET_PREFIX}{upper} is not", upper = .0.to_ascii_uppercase())]
     SchemeWithoutSecret(String),
+    // The URL itself is left out: it may carry a token.
+    #[error("{var}: {reason}")]
+    InvalidTarget { var: String, reason: String },
 }
 
 /// A signing secret. `Debug` is redacted so it can't end up in logs by accident.
@@ -47,6 +53,8 @@ pub struct SourceConfig {
 pub struct Config {
     /// Keyed by source name with `-` normalized to `_`, since env var names can't contain `-`.
     sources: HashMap<String, SourceConfig>,
+    /// Where to forward each source's hooks, keyed like `sources`.
+    targets: HashMap<String, Url>,
     pub stripe_tolerance: Duration,
 }
 
@@ -54,14 +62,15 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             sources: HashMap::new(),
+            targets: HashMap::new(),
             stripe_tolerance: DEFAULT_STRIPE_TOLERANCE,
         }
     }
 }
 
 impl Config {
-    /// Builds the config from `HOOKRELAY_SECRET_<SOURCE>` and `HOOKRELAY_SCHEME_<SOURCE>`
-    /// variables. Other variables are ignored.
+    /// Builds the config from `HOOKRELAY_SECRET_<SOURCE>`, `HOOKRELAY_SCHEME_<SOURCE>` and
+    /// `HOOKRELAY_TARGET_<SOURCE>` variables. Other variables are ignored.
     ///
     /// The scheme defaults to the source name for `github` and `stripe`; any other source
     /// with a secret must set its scheme explicitly, so verification is never guessed.
@@ -71,6 +80,7 @@ impl Config {
     {
         let mut secrets = HashMap::new();
         let mut schemes = HashMap::new();
+        let mut targets = HashMap::new();
         for (var, value) in vars {
             if let Some(suffix) = var.strip_prefix(SECRET_PREFIX) {
                 let source = source_key(&var, suffix)?;
@@ -84,6 +94,11 @@ impl Config {
                     .parse()
                     .map_err(|source| ConfigError::UnknownScheme { var, source })?;
                 schemes.insert(source, scheme);
+            } else if let Some(suffix) = var.strip_prefix(TARGET_PREFIX) {
+                let source = source_key(&var, suffix)?;
+                let target = parse_target(&value)
+                    .map_err(|reason| ConfigError::InvalidTarget { var, reason })?;
+                targets.insert(source, target);
             }
         }
 
@@ -106,6 +121,7 @@ impl Config {
 
         Ok(Self {
             sources,
+            targets,
             stripe_tolerance,
         })
     }
@@ -115,6 +131,12 @@ impl Config {
         let secret = Secret(secret.into());
         self.sources
             .insert(normalize(source), SourceConfig { scheme, secret });
+        self
+    }
+
+    /// Forwards hooks from `source` to `target`, replacing any previous target.
+    pub fn with_target(mut self, source: &str, target: Url) -> Self {
+        self.targets.insert(normalize(source), target);
         self
     }
 
@@ -133,6 +155,33 @@ impl Config {
         sources.sort_unstable_by_key(|(name, _)| *name);
         sources
     }
+
+    /// Where hooks from `source` are forwarded, or `None` if they are only stored.
+    pub fn target(&self, source: &str) -> Option<&Url> {
+        self.targets.get(&normalize(source))
+    }
+
+    /// Forwarded sources and their targets, sorted by name.
+    pub fn targets(&self) -> Vec<(&str, &Url)> {
+        let mut targets: Vec<_> = self
+            .targets
+            .iter()
+            .map(|(name, url)| (name.as_str(), url))
+            .collect();
+        targets.sort_unstable_by_key(|(name, _)| *name);
+        targets
+    }
+}
+
+fn parse_target(value: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|err| err.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!(
+            "scheme must be http or https, not `{}`",
+            url.scheme()
+        ));
+    }
+    Ok(url)
 }
 
 /// The single canonical key used for both storage and lookup.
@@ -248,6 +297,34 @@ mod tests {
     fn rejects_invalid_source_name() {
         let err = load(&[("HOOKRELAY_SECRET_A.B", "s")]).unwrap_err();
         assert!(matches!(err, ConfigError::InvalidSource { .. }));
+    }
+
+    #[test]
+    fn loads_targets_for_any_source() {
+        let config = load(&[
+            ("HOOKRELAY_TARGET_GITHUB", "http://localhost:3000/github"),
+            ("HOOKRELAY_TARGET_MY_APP", "https://example.com/in"),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.target("github").unwrap().as_str(),
+            "http://localhost:3000/github"
+        );
+        assert!(config.target("my-app").is_some());
+        assert!(config.target("stripe").is_none());
+        // A target doesn't turn on verification.
+        assert!(config.verified_sources().is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_target() {
+        for url in ["not a url", "ftp://example.com/", "file:///etc/passwd"] {
+            let err = load(&[("HOOKRELAY_TARGET_GITHUB", url)]).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::InvalidTarget { .. }),
+                "{url}: {err:?}"
+            );
+        }
     }
 
     #[test]
