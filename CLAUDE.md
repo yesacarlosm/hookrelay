@@ -29,15 +29,23 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 - `src/main.rs`: clap CLI (`serve`), tracing setup, graceful shutdown.
 - `src/lib.rs`: exports `router()` so integration tests can drive the app in-process.
 - `src/routes.rs`: axum 0.8 handlers (path syntax is `/{param}`, not `/:param`). Router
-  state is `AppState { pool, config: Arc<Config> }`; `SqlitePool` is extractable via `FromRef`.
+  state is `AppState { pool, config: Arc<Config>, wake_forwarder: Arc<Notify> }`; `SqlitePool` is extractable via `FromRef`.
 - `src/verify.rs`: pure HMAC-SHA256 verification (`Scheme::{Github, Stripe}`), no axum types.
 - `src/config.rs`: `Config::from_vars` reads `HOOKRELAY_SECRET_<SOURCE>` /
-  `HOOKRELAY_SCHEME_<SOURCE>`; `Secret` has a redacted `Debug`. Ambiguous config fails at startup.
+  `HOOKRELAY_SCHEME_<SOURCE>` / `HOOKRELAY_TARGET_<SOURCE>`; `Secret` has a redacted
+  `Debug`. Ambiguous config fails at startup. Target URLs may carry tokens: never log or
+  return them in full (log `origin()` only).
 - `src/db.rs`: sqlx + SQLite with runtime queries (no `query!` macros, so no `DATABASE_URL`
-  needed to build). Schema is created in `migrate()`; move to `sqlx::migrate!` once the
-  schema has more than one table.
+  needed to build). Schema lives in `migrations/` and is embedded with `sqlx::migrate!`;
+  never edit an applied migration, add a new one. `0001_hooks.sql` uses `IF NOT EXISTS`
+  so pre-migration databases adopt it.
+- `src/forward.rs`: background worker. The queue is the `deliveries` table
+  (`pending` → `delivered` | `dead`; `dead` rows are the dead-letter list). Woken by
+  `AppState::wake_forwarder` on insert, otherwise sleeps until the next due retry.
+  Pure helpers (`backoff`, `classify`, `forward_headers`) are unit-tested.
 - `tests/`: integration tests use `sqlite::memory:` (pool is capped at 1 connection because
   each in-memory connection is a separate DB) and `tower::ServiceExt::oneshot`.
+  `tests/forwarding.rs` runs the real worker against a stub axum target on `127.0.0.1:0`.
 
 ## Roadmap (keep README in sync)
 1. v0.1: receive/store/list/get ✅
@@ -45,7 +53,7 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
    `Mac::verify_slice`). GitHub: `X-Hub-Signature-256: sha256=<hex>`. Stripe:
    `Stripe-Signature: t=<ts>,v1=<hex>` over `"{t}.{body}"` with a timestamp tolerance.
    Per-source secrets from config/env. ✅
-3. v0.3: forwarding with `reqwest`, exponential backoff with jitter, dead-letter table.
+3. v0.3: forwarding with `reqwest`, exponential backoff with jitter, dead-letter table. ✅
 4. v0.4: replay endpoint and `list`/`replay` CLI subcommands.
 5. Dockerfile + release workflow.
 
