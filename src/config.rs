@@ -9,6 +9,7 @@ use crate::verify::{DEFAULT_STRIPE_TOLERANCE, Scheme, UnknownScheme};
 pub const SECRET_PREFIX: &str = "HOOKRELAY_SECRET_";
 pub const SCHEME_PREFIX: &str = "HOOKRELAY_SCHEME_";
 pub const TARGET_PREFIX: &str = "HOOKRELAY_TARGET_";
+pub const ADMIN_TOKEN_VAR: &str = "HOOKRELAY_ADMIN_TOKEN";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -55,6 +56,8 @@ pub struct Config {
     sources: HashMap<String, SourceConfig>,
     /// Where to forward each source's hooks, keyed like `sources`.
     targets: HashMap<String, Url>,
+    /// Bearer token for the admin endpoints; `None` leaves them open.
+    admin_token: Option<Secret>,
     pub stripe_tolerance: Duration,
 }
 
@@ -63,14 +66,15 @@ impl Default for Config {
         Self {
             sources: HashMap::new(),
             targets: HashMap::new(),
+            admin_token: None,
             stripe_tolerance: DEFAULT_STRIPE_TOLERANCE,
         }
     }
 }
 
 impl Config {
-    /// Builds the config from `HOOKRELAY_SECRET_<SOURCE>`, `HOOKRELAY_SCHEME_<SOURCE>` and
-    /// `HOOKRELAY_TARGET_<SOURCE>` variables. Other variables are ignored.
+    /// Builds the config from `HOOKRELAY_SECRET_<SOURCE>`, `HOOKRELAY_SCHEME_<SOURCE>`,
+    /// `HOOKRELAY_TARGET_<SOURCE>` and `HOOKRELAY_ADMIN_TOKEN`. Other variables are ignored.
     ///
     /// The scheme defaults to the source name for `github` and `stripe`; any other source
     /// with a secret must set its scheme explicitly, so verification is never guessed.
@@ -81,8 +85,14 @@ impl Config {
         let mut secrets = HashMap::new();
         let mut schemes = HashMap::new();
         let mut targets = HashMap::new();
+        let mut admin_token = None;
         for (var, value) in vars {
-            if let Some(suffix) = var.strip_prefix(SECRET_PREFIX) {
+            if var == ADMIN_TOKEN_VAR {
+                if value.is_empty() {
+                    return Err(ConfigError::EmptySecret { var });
+                }
+                admin_token = Some(Secret(value.into_bytes()));
+            } else if let Some(suffix) = var.strip_prefix(SECRET_PREFIX) {
                 let source = source_key(&var, suffix)?;
                 if value.is_empty() {
                     return Err(ConfigError::EmptySecret { var });
@@ -122,6 +132,7 @@ impl Config {
         Ok(Self {
             sources,
             targets,
+            admin_token,
             stripe_tolerance,
         })
     }
@@ -132,6 +143,17 @@ impl Config {
         self.sources
             .insert(normalize(source), SourceConfig { scheme, secret });
         self
+    }
+
+    /// Requires `token` on the admin endpoints.
+    pub fn with_admin_token(mut self, token: impl Into<Vec<u8>>) -> Self {
+        self.admin_token = Some(Secret(token.into()));
+        self
+    }
+
+    /// The admin endpoints' bearer token, or `None` if they are open.
+    pub fn admin_token(&self) -> Option<&Secret> {
+        self.admin_token.as_ref()
     }
 
     /// Forwards hooks from `source` to `target`, replacing any previous target.
@@ -328,8 +350,24 @@ mod tests {
     }
 
     #[test]
+    fn loads_admin_token() {
+        let config = load(&[("HOOKRELAY_ADMIN_TOKEN", "t0ken")]).unwrap();
+        assert_eq!(config.admin_token().unwrap().expose(), b"t0ken");
+        assert!(load(&[]).unwrap().admin_token().is_none());
+
+        let err = load(&[("HOOKRELAY_ADMIN_TOKEN", "")]).unwrap_err();
+        assert!(matches!(err, ConfigError::EmptySecret { .. }));
+    }
+
+    #[test]
     fn secret_debug_is_redacted() {
-        let config = Config::default().with_source("github", Scheme::Github, "hunter2");
-        assert!(!format!("{config:?}").contains("hunter2"));
+        let config = Config::default()
+            .with_source("github", Scheme::Github, "hunter2")
+            .with_admin_token("t0ken");
+        let debug = format!("{config:?}");
+        assert!(
+            !debug.contains("hunter2") && !debug.contains("t0ken"),
+            "{debug}"
+        );
     }
 }
