@@ -3,7 +3,8 @@
 //!
 //! The queue lives in the `deliveries` table, so pending retries survive restarts.
 //! Delivery is at least once: a crash between a successful POST and recording it means
-//! the hook is sent again, so targets should dedupe on `X-Hookrelay-Hook-Id`.
+//! the hook is sent again, so targets should dedupe on `X-Hookrelay-Delivery-Id`. Retries
+//! keep the delivery id; replays get a new one.
 
 use std::{error::Error, future::Future, sync::Arc, time::Duration};
 
@@ -300,6 +301,7 @@ fn forward_headers(delivery: &DueDelivery, attempt: i64) -> HeaderMap {
         })
         .collect();
     headers.insert("x-hookrelay-hook-id", HeaderValue::from(delivery.hook_id));
+    headers.insert("x-hookrelay-delivery-id", HeaderValue::from(delivery.id));
     headers.insert("x-hookrelay-attempt", HeaderValue::from(attempt));
     if let Ok(source) = HeaderValue::from_str(&delivery.source) {
         headers.insert("x-hookrelay-source", source);
@@ -402,6 +404,7 @@ mod tests {
         assert_eq!(headers["content-type"], "application/json");
         assert_eq!(headers["x-hub-signature-256"], "sha256=abc");
         assert_eq!(headers["x-hookrelay-hook-id"], "42");
+        assert_eq!(headers["x-hookrelay-delivery-id"], "1");
         assert_eq!(headers["x-hookrelay-attempt"], "2");
         assert_eq!(headers["x-hookrelay-source"], "github");
         for skipped in [

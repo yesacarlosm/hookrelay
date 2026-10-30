@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
-    Row, SqlitePool,
+    Row, SqliteExecutor, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
 /// A webhook as it was received.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hook {
     pub id: i64,
     pub source: String,
@@ -56,18 +56,37 @@ pub async fn insert_hook(
     .await?
     .last_insert_rowid();
     if let Some(target) = target {
-        sqlx::query(
-            "INSERT INTO deliveries (hook_id, target_url, next_attempt_at_ms, updated_at_ms)
-             VALUES (?1, ?2, ?3, ?3)",
-        )
-        .bind(hook_id)
-        .bind(target)
-        .bind(received_at_ms)
-        .execute(&mut *tx)
-        .await?;
+        queue_delivery(&mut *tx, hook_id, target, received_at_ms).await?;
     }
     tx.commit().await?;
     Ok(hook_id)
+}
+
+/// Queues a delivery of `hook_id` to `target`, due at `now_ms`, and returns its id.
+pub async fn queue_delivery<'e>(
+    executor: impl SqliteExecutor<'e>,
+    hook_id: i64,
+    target: &str,
+    now_ms: i64,
+) -> sqlx::Result<i64> {
+    let result = sqlx::query(
+        "INSERT INTO deliveries (hook_id, target_url, next_attempt_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?3)",
+    )
+    .bind(hook_id)
+    .bind(target)
+    .bind(now_ms)
+    .execute(executor)
+    .await?;
+    Ok(result.last_insert_rowid())
+}
+
+/// The source a hook was received from, or `None` if there is no such hook.
+pub async fn hook_source(pool: &SqlitePool, id: i64) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar("SELECT source FROM hooks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn get_hook(pool: &SqlitePool, id: i64) -> sqlx::Result<Option<Hook>> {

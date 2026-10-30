@@ -13,6 +13,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("invalid or missing signature")]
     Unauthorized,
+    #[error("{0}")]
+    Conflict(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -23,6 +25,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Database(err) => {
                 tracing::error!(error = %err, "database error");
                 StatusCode::INTERNAL_SERVER_ERROR

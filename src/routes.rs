@@ -52,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/hooks", get(list_hooks))
         .route("/hooks/{source}", post(receive_hook))
         .route("/hooks/id/{id}", get(get_hook))
+        .route("/hooks/id/{id}/replay", post(replay_hook))
         .route("/deliveries", get(list_deliveries))
         .with_state(state)
 }
@@ -139,6 +140,28 @@ async fn get_hook(
         .await?
         .map(Json)
         .ok_or(AppError::NotFound)
+}
+
+/// Sends a stored hook again, as a new delivery to its source's current target. Earlier
+/// deliveries, dead or not, are left as they are.
+async fn replay_hook(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    let source = db::hook_source(&state.pool, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let target = state
+        .config
+        .target(&source)
+        .ok_or_else(|| AppError::Conflict(format!("source `{source}` has no forwarding target")))?;
+    let delivery_id = db::queue_delivery(&state.pool, id, target.as_str(), now_ms()).await?;
+    tracing::info!(id, delivery_id, %source, "hook queued for replay");
+    state.wake_forwarder.notify_one();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "delivery_id": delivery_id })),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

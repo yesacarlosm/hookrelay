@@ -256,3 +256,74 @@ async fn rejects_unknown_delivery_status() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("lost"));
 }
+
+async fn replay(app: &Router, hook_id: i64) -> (StatusCode, Value) {
+    send(
+        app,
+        Request::post(format!("/hooks/id/{hook_id}/replay"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn replay_redelivers_a_dead_lettered_hook() {
+    let (target, url) = Target::start(&[404]).await;
+    let app = relay(Config::default().with_target("github", url), 3).await;
+
+    let hook_id = post_hook(&app, "github", r#"{"ref":"main"}"#).await;
+    let dead = settled_delivery(&app, hook_id).await;
+    assert_eq!(dead["status"], "dead");
+
+    let (status, replayed) = replay(&app, hook_id).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let delivery_id = replayed["delivery_id"].as_i64().unwrap();
+    assert_ne!(Some(delivery_id), dead["id"].as_i64());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let replayed = loop {
+        let all = deliveries(&app, &format!("hook_id={hook_id}")).await;
+        if let Some(d) = all.iter().find(|d| d["id"] == delivery_id)
+            && d["status"] != "pending"
+        {
+            break d.clone();
+        }
+        assert!(Instant::now() < deadline, "replay never settled: {all:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(replayed["status"], "delivered");
+    // The dead delivery stays in the dead-letter list as history.
+    assert_eq!(deliveries(&app, "status=dead").await.len(), 1);
+
+    let received = target.received();
+    assert_eq!(received.len(), 2);
+    let (first, second) = (&received[0], &received[1]);
+    assert_eq!(first.1, second.1);
+    assert_eq!(
+        first.0["x-hookrelay-hook-id"],
+        second.0["x-hookrelay-hook-id"]
+    );
+    assert_ne!(
+        first.0["x-hookrelay-delivery-id"],
+        second.0["x-hookrelay-delivery-id"]
+    );
+    assert_eq!(
+        second.0["x-hookrelay-delivery-id"],
+        delivery_id.to_string().as_str()
+    );
+}
+
+#[tokio::test]
+async fn replay_rejects_unknown_hooks_and_sources_without_a_target() {
+    let (_target, url) = Target::start(&[]).await;
+    let app = relay(Config::default().with_target("github", url), 3).await;
+
+    let (status, _) = replay(&app, 999).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let stripe_id = post_hook(&app, "stripe", "{}").await;
+    let (status, body) = replay(&app, stripe_id).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "source `stripe` has no forwarding target");
+}
