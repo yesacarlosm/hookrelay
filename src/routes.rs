@@ -95,8 +95,17 @@ async fn receive_hook(
         .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
         .collect();
 
-    let id = db::insert_hook(&state.pool, &source, received_at_ms, &headers, &body).await?;
-    tracing::info!(id, %source, bytes = body.len(), "hook received");
+    let target = state.config.target(&source).map(|url| url.as_str());
+    let id = db::insert_hook(
+        &state.pool,
+        &source,
+        received_at_ms,
+        &headers,
+        &body,
+        target,
+    )
+    .await?;
+    tracing::info!(id, %source, bytes = body.len(), forward = target.is_some(), "hook received");
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
