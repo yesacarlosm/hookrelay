@@ -2,7 +2,12 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use hookrelay::{AppState, config::Config, forward::ForwardSettings};
+use hookrelay::{
+    AppState,
+    client::{self, HookrelayClient},
+    config::Config,
+    forward::ForwardSettings,
+};
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
@@ -44,6 +49,39 @@ enum Command {
         #[arg(long, env = "HOOKRELAY_RETRY_MAX_SECS", default_value_t = 3600)]
         retry_max_secs: u64,
     },
+    /// List stored hooks on a running server, newest first.
+    List {
+        #[command(flatten)]
+        server: ServerArgs,
+        /// Only hooks from this source.
+        #[arg(long)]
+        source: Option<String>,
+        /// Maximum number of hooks to show (1-500).
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+        /// Print the raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send stored hooks to their source's target again, as new deliveries.
+    Replay {
+        #[command(flatten)]
+        server: ServerArgs,
+        /// Ids of the hooks to replay.
+        #[arg(required = true)]
+        ids: Vec<i64>,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+struct ServerArgs {
+    /// Base URL of the hookrelay server.
+    #[arg(
+        long,
+        env = "HOOKRELAY_SERVER",
+        default_value = "http://127.0.0.1:8080"
+    )]
+    server: String,
 }
 
 #[tokio::main]
@@ -52,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        // Keeps stdout for command output, e.g. `list --json | jq`.
+        .with_writer(std::io::stderr)
         .init();
 
     match Cli::parse().command {
@@ -77,6 +117,36 @@ async fn main() -> anyhow::Result<()> {
                 retry_max: Duration::from_secs(retry_max_secs),
             };
             serve(addr, &database_url, config, forward).await
+        }
+        Command::List {
+            server,
+            source,
+            limit,
+            json,
+        } => {
+            let client = HookrelayClient::new(&server.server)?;
+            let hooks = client.list_hooks(source.as_deref(), Some(limit)).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hooks)?);
+            } else {
+                print!("{}", client::hooks_table(&hooks));
+            }
+            Ok(())
+        }
+        Command::Replay { server, ids } => {
+            let client = HookrelayClient::new(&server.server)?;
+            let mut failed = 0;
+            for id in ids {
+                match client.replay(id).await {
+                    Ok(delivery_id) => println!("hook {id}: queued as delivery {delivery_id}"),
+                    Err(err) => {
+                        eprintln!("hook {id}: {:#}", anyhow::Error::from(err));
+                        failed += 1;
+                    }
+                }
+            }
+            anyhow::ensure!(failed == 0, "{failed} replay(s) failed");
+            Ok(())
         }
     }
 }
