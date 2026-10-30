@@ -29,17 +29,7 @@ pub async fn connect(url: &str) -> sqlx::Result<SqlitePool> {
 }
 
 async fn migrate(pool: &SqlitePool) -> sqlx::Result<()> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS hooks (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            source         TEXT    NOT NULL,
-            received_at_ms INTEGER NOT NULL,
-            headers        TEXT    NOT NULL,
-            body           BLOB    NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await?;
+    sqlx::migrate!().run(pool).await?;
     Ok(())
 }
 
