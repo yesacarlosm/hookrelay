@@ -29,6 +29,10 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 - `src/main.rs`: clap CLI (`serve`, `list`, `replay`), tracing setup (logs go to stderr so
   stdout stays clean for command output), graceful shutdown.
 - `src/lib.rs`: exports `router()` so integration tests can drive the app in-process.
+- `src/auth.rs`: `require_admin` middleware, applied with `route_layer` to the admin
+  sub-router in `routes::router` (everything but `/health` and `POST /hooks/{source}`).
+  Optional `HOOKRELAY_ADMIN_TOKEN` bearer token, constant-time compare via `subtle`.
+  New read or replay endpoints go in the admin sub-router.
 - `src/client.rs`: HTTP client for a running server, used by `list`/`replay`. The CLI goes
   through the API, not the DB, so the server stays the only owner of targets and the queue.
 - `src/routes.rs`: axum 0.8 handlers (path syntax is `/{param}`, not `/:param`). Router

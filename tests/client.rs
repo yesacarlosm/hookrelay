@@ -35,7 +35,7 @@ async fn lists_hooks_with_filters() {
     for source in ["github", "stripe", "github"] {
         post_hook(&base, source).await;
     }
-    let client = HookrelayClient::new(&base).unwrap();
+    let client = HookrelayClient::new(&base, None).unwrap();
 
     let hooks = client.list_hooks(Some("github"), None).await.unwrap();
     assert_eq!(hooks.iter().map(|h| h.id).collect::<Vec<_>>(), [3, 1]);
@@ -50,7 +50,7 @@ async fn replays_a_hook_and_reports_api_errors() {
     let base = server(Config::default().with_target("github", target)).await;
     let github_id = post_hook(&base, "github").await;
     let stripe_id = post_hook(&base, "stripe").await;
-    let client = HookrelayClient::new(&base).unwrap();
+    let client = HookrelayClient::new(&base, None).unwrap();
 
     // Delivery 1 was queued on receipt, so the replay is delivery 2.
     assert_eq!(client.replay(github_id).await.unwrap(), 2);
@@ -74,7 +74,7 @@ async fn reports_an_unreachable_server() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let client = HookrelayClient::new(&base).unwrap();
+    let client = HookrelayClient::new(&base, None).unwrap();
 
     let err = tokio::time::timeout(Duration::from_secs(5), client.list_hooks(None, None))
         .await

@@ -3,7 +3,11 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use hookrelay::{AppState, config::Config};
+use hookrelay::{
+    AppState,
+    client::{ClientError, HookrelayClient},
+    config::Config,
+};
 use tower::ServiceExt;
 
 const TOKEN: &str = "t0ken";
@@ -81,4 +85,29 @@ async fn health_and_receiving_stay_open() {
         status(&app, "POST", "/hooks/stripe", None).await,
         StatusCode::CREATED
     );
+}
+
+#[tokio::test]
+async fn client_sends_the_token() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = app().await;
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let client = HookrelayClient::new(&base, Some(TOKEN)).unwrap();
+    assert!(client.list_hooks(None, None).await.unwrap().is_empty());
+
+    let err = HookrelayClient::new(&base, None)
+        .unwrap()
+        .list_hooks(None, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, ClientError::Api { status, message }
+            if *status == StatusCode::UNAUTHORIZED && message == "invalid or missing admin token"),
+        "{err:?}"
+    );
+
+    let err = HookrelayClient::new(&base, Some("bad\ntoken")).unwrap_err();
+    assert!(matches!(err, ClientError::InvalidToken), "{err:?}");
 }

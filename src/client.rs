@@ -7,7 +7,10 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use reqwest::{Client, RequestBuilder, Url};
+use reqwest::{
+    Client, RequestBuilder, Url,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
+};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::db::Hook;
@@ -18,6 +21,8 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 pub enum ClientError {
     #[error("invalid server URL")]
     InvalidUrl(#[from] url::ParseError),
+    #[error("the admin token contains characters that can't go in an HTTP header")]
+    InvalidToken,
     #[error("request to the hookrelay server failed")]
     Http(#[from] reqwest::Error),
     #[error("server responded with {status}: {message}")]
@@ -44,13 +49,24 @@ pub struct HookrelayClient {
 }
 
 impl HookrelayClient {
-    pub fn new(base: &str) -> Result<Self, ClientError> {
+    /// A client for the server at `base`, sending `token` as a bearer token if given.
+    pub fn new(base: &str, token: Option<&str>) -> Result<Self, ClientError> {
         let mut base = Url::parse(base)?;
         // So `join` appends to a base path like `/relay` instead of replacing it.
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));
         }
-        let http = Client::builder().timeout(TIMEOUT).build()?;
+        let mut headers = HeaderMap::new();
+        if let Some(token) = token {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|_| ClientError::InvalidToken)?;
+            value.set_sensitive(true);
+            headers.insert(AUTHORIZATION, value);
+        }
+        let http = Client::builder()
+            .timeout(TIMEOUT)
+            .default_headers(headers)
+            .build()?;
         Ok(Self { http, base })
     }
 
@@ -168,7 +184,7 @@ ID  RECEIVED (UTC)        SOURCE  BYTES
 
     #[test]
     fn keeps_the_base_path_of_the_server_url() {
-        let client = HookrelayClient::new("http://localhost:8080/relay").unwrap();
+        let client = HookrelayClient::new("http://localhost:8080/relay", None).unwrap();
         assert_eq!(
             client.base.join("hooks").unwrap().as_str(),
             "http://localhost:8080/relay/hooks"

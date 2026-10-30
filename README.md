@@ -37,6 +37,9 @@ curl localhost:8080/hooks/id/1           # one hook, with headers and body
 | POST   | `/hooks/id/{id}/replay` | Queue the hook for delivery again. `202 {"delivery_id":n}`; `404` if there's no such hook, `409` if its source has no target |
 | GET    | `/deliveries`      | List forwarding attempts. Query: `status` (`pending`, `delivered`, `dead`), `hook_id`, `limit` |
 
+Everything except `/health` and `POST /hooks/{source}` is an admin endpoint: it needs
+`Authorization: Bearer <token>` when an [admin token](#admin-token) is set.
+
 ## Configuration
 
 | Flag                      | Env var                          | Default                 |
@@ -51,9 +54,28 @@ curl localhost:8080/hooks/id/1           # one hook, with headers and body
 | `--forward-timeout-secs`  | `HOOKRELAY_FORWARD_TIMEOUT_SECS` | `10`                    |
 | `--retry-base-ms`         | `HOOKRELAY_RETRY_BASE_MS`        | `1000`                  |
 | `--retry-max-secs`        | `HOOKRELAY_RETRY_MAX_SECS`       | `3600`                  |
+|                           | `HOOKRELAY_ADMIN_TOKEN`          | unset (admin API open)  |
 | `--server` (`list`, `replay`) | `HOOKRELAY_SERVER`           | `http://127.0.0.1:8080` |
+| `--token` (`list`, `replay`)  | `HOOKRELAY_ADMIN_TOKEN`      | unset                   |
 
 Logging is controlled by `RUST_LOG` (default `info`).
+
+## Admin token
+
+The admin endpoints show stored hooks (which can hold secrets of their own) and trigger
+deliveries, so anything beyond a local setup should set `HOOKRELAY_ADMIN_TOKEN`. They then
+answer `401` unless the request carries the token. It's compared in constant time and
+never logged. Receiving hooks stays open, since providers authenticate with signatures.
+
+Without a token the admin API is open, which is fine on the default `127.0.0.1` bind;
+hookrelay logs a warning if it listens anywhere else without one.
+
+```sh
+HOOKRELAY_ADMIN_TOKEN=$(openssl rand -hex 32) cargo run -- serve
+
+curl localhost:8080/hooks -H "Authorization: Bearer $HOOKRELAY_ADMIN_TOKEN"
+hookrelay list   # reads HOOKRELAY_ADMIN_TOKEN too
+```
 
 ## Signature verification
 

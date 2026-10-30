@@ -82,6 +82,16 @@ struct ServerArgs {
         default_value = "http://127.0.0.1:8080"
     )]
     server: String,
+    /// Admin token, if the server requires one. Prefer the env var: flags show up in `ps`.
+    #[arg(long, env = "HOOKRELAY_ADMIN_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+}
+
+impl ServerArgs {
+    fn client(&self) -> anyhow::Result<HookrelayClient> {
+        HookrelayClient::new(&self.server, self.token.as_deref())
+            .with_context(|| format!("can't create a client for {}", self.server))
+    }
 }
 
 #[tokio::main]
@@ -124,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
             limit,
             json,
         } => {
-            let client = HookrelayClient::new(&server.server)?;
+            let client = server.client()?;
             let hooks = client.list_hooks(source.as_deref(), Some(limit)).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&hooks)?);
@@ -134,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Replay { server, ids } => {
-            let client = HookrelayClient::new(&server.server)?;
+            let client = server.client()?;
             let mut failed = 0;
             for id in ids {
                 match client.replay(id).await {
@@ -157,6 +167,12 @@ async fn serve(
     config: Config,
     forward: ForwardSettings,
 ) -> anyhow::Result<()> {
+    if config.admin_token().is_none() && !addr.ip().is_loopback() {
+        tracing::warn!(
+            %addr,
+            "HOOKRELAY_ADMIN_TOKEN is not set: anyone who can reach this address can read stored hooks and replay them"
+        );
+    }
     for (source, scheme) in config.verified_sources() {
         tracing::info!(source, ?scheme, "signature verification enabled");
     }
