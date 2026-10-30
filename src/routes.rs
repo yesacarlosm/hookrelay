@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 
 use crate::{
     config::Config,
-    db::{self, Hook},
+    db::{self, Delivery, DeliveryStatus, Hook},
     error::AppError,
     now_ms, verify,
 };
@@ -52,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/hooks", get(list_hooks))
         .route("/hooks/{source}", post(receive_hook))
         .route("/hooks/id/{id}", get(get_hook))
+        .route("/deliveries", get(list_deliveries))
         .with_state(state)
 }
 
@@ -138,6 +139,31 @@ async fn get_hook(
         .await?
         .map(Json)
         .ok_or(AppError::NotFound)
+}
+
+#[derive(Debug, Deserialize)]
+struct DeliveryParams {
+    status: Option<String>,
+    hook_id: Option<i64>,
+    limit: Option<i64>,
+}
+
+async fn list_deliveries(
+    State(pool): State<SqlitePool>,
+    Query(params): Query<DeliveryParams>,
+) -> Result<Json<Vec<Delivery>>, AppError> {
+    let status = params
+        .status
+        .as_deref()
+        .map(str::parse::<DeliveryStatus>)
+        .transpose()
+        .map_err(|err| AppError::BadRequest(err.to_string()))?;
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_LIST_LIMIT)
+        .clamp(1, MAX_LIST_LIMIT);
+    let deliveries = db::list_deliveries(&pool, status, params.hook_id, limit).await?;
+    Ok(Json(deliveries))
 }
 
 fn is_valid_source(source: &str) -> bool {
