@@ -26,8 +26,11 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 - Keep comments sparse: explain *why*, not *what*.
 
 ## Layout
-- `src/main.rs`: clap CLI (`serve`), tracing setup, graceful shutdown.
+- `src/main.rs`: clap CLI (`serve`, `list`, `replay`), tracing setup (logs go to stderr so
+  stdout stays clean for command output), graceful shutdown.
 - `src/lib.rs`: exports `router()` so integration tests can drive the app in-process.
+- `src/client.rs`: HTTP client for a running server, used by `list`/`replay`. The CLI goes
+  through the API, not the DB, so the server stays the only owner of targets and the queue.
 - `src/routes.rs`: axum 0.8 handlers (path syntax is `/{param}`, not `/:param`). Router
   state is `AppState { pool, config: Arc<Config>, wake_forwarder: Arc<Notify> }`; `SqlitePool` is extractable via `FromRef`.
 - `src/verify.rs`: pure HMAC-SHA256 verification (`Scheme::{Github, Stripe}`), no axum types.
@@ -45,7 +48,8 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
   Pure helpers (`backoff`, `classify`, `forward_headers`) are unit-tested.
 - `tests/`: integration tests use `sqlite::memory:` (pool is capped at 1 connection because
   each in-memory connection is a separate DB) and `tower::ServiceExt::oneshot`.
-  `tests/forwarding.rs` runs the real worker against a stub axum target on `127.0.0.1:0`.
+  `tests/forwarding.rs` runs the real worker against a stub axum target on `127.0.0.1:0`;
+  `tests/client.rs` serves the router on a real port to test the CLI client.
 
 ## Roadmap (keep README in sync)
 1. v0.1: receive/store/list/get ✅
@@ -54,7 +58,7 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
    `Stripe-Signature: t=<ts>,v1=<hex>` over `"{t}.{body}"` with a timestamp tolerance.
    Per-source secrets from config/env. ✅
 3. v0.3: forwarding with `reqwest`, exponential backoff with jitter, dead-letter table. ✅
-4. v0.4: replay endpoint and `list`/`replay` CLI subcommands.
+4. v0.4: replay endpoint and `list`/`replay` CLI subcommands. ✅
 5. Dockerfile + release workflow.
 
 ## Skills to use (Claude Code)

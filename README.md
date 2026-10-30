@@ -4,7 +4,8 @@
 
 A small, self-hosted webhook relay written in Rust. Point any webhook provider at it,
 and hookrelay verifies its signature, stores every delivery so you can inspect it, and
-forwards it to your service, retrying until it gets through.
+forwards it to your service, retrying until it gets through. Anything that still fails
+can be replayed later.
 
 ```
  GitHub / Stripe / ...  ──POST──▶  hookrelay  ──▶  SQLite
@@ -33,6 +34,7 @@ curl localhost:8080/hooks/id/1           # one hook, with headers and body
 | POST   | `/hooks/{source}`  | Store a webhook. `source` is `[a-z0-9_-]{1,64}`. `401` if the source has a secret and the signature is missing or invalid |
 | GET    | `/hooks`           | List hooks. Query: `source`, `limit` (1–500, default 50) |
 | GET    | `/hooks/id/{id}`   | Fetch one hook                                      |
+| POST   | `/hooks/id/{id}/replay` | Queue the hook for delivery again. `202 {"delivery_id":n}`; `404` if there's no such hook, `409` if its source has no target |
 | GET    | `/deliveries`      | List forwarding attempts. Query: `status` (`pending`, `delivered`, `dead`), `hook_id`, `limit` |
 
 ## Configuration
@@ -49,6 +51,7 @@ curl localhost:8080/hooks/id/1           # one hook, with headers and body
 | `--forward-timeout-secs`  | `HOOKRELAY_FORWARD_TIMEOUT_SECS` | `10`                    |
 | `--retry-base-ms`         | `HOOKRELAY_RETRY_BASE_MS`        | `1000`                  |
 | `--retry-max-secs`        | `HOOKRELAY_RETRY_MAX_SECS`       | `3600`                  |
+| `--server` (`list`, `replay`) | `HOOKRELAY_SERVER`           | `http://127.0.0.1:8080` |
 
 Logging is controlled by `RUST_LOG` (default `info`).
 
@@ -95,11 +98,12 @@ target with the original body and headers, plus the ones below. Hop-by-hop heade
 proxy in front of hookrelay may add (`Authorization`, `Cookie`, `Forwarded`,
 `X-Forwarded-*`, `X-Real-IP`), since those were meant for hookrelay, not the target.
 
-| Header                | Value                                   |
-|-----------------------|-----------------------------------------|
-| `X-Hookrelay-Hook-Id` | the stored hook's id, for deduplication |
-| `X-Hookrelay-Source`  | the source name                         |
-| `X-Hookrelay-Attempt` | `1` for the first attempt, then `2`, …  |
+| Header                    | Value                                              |
+|---------------------------|----------------------------------------------------|
+| `X-Hookrelay-Hook-Id`     | the stored hook's id                               |
+| `X-Hookrelay-Delivery-Id` | the delivery's id: same on retries, new on replays |
+| `X-Hookrelay-Source`      | the source name                                    |
+| `X-Hookrelay-Attempt`     | `1` for the first attempt, then `2`, …             |
 
 The original signature headers are passed through, so the target can verify them too.
 
@@ -124,15 +128,38 @@ curl 'localhost:8080/deliveries?status=dead'
 
 The queue lives in SQLite, so pending retries survive a restart. Delivery is at least
 once: if hookrelay stops between the target answering and recording that, the hook is
-sent again, so targets should dedupe on `X-Hookrelay-Hook-Id`. Target URLs may carry a
-token, so they're never logged in full or returned by the API.
+sent again, so targets should dedupe on `X-Hookrelay-Delivery-Id` (or on
+`X-Hookrelay-Hook-Id` to ignore replays too). Target URLs may carry a token, so they're
+never logged in full or returned by the API.
+
+## Replay
+
+Replaying a hook queues a new delivery to its source's *current* target, so you can fix
+the target (or its config) and send dead-lettered hooks again. Earlier deliveries are
+kept as history. Replays only ever go to configured targets.
+
+The `list` and `replay` commands talk to a running server (`--server`, default
+`http://127.0.0.1:8080`):
+
+```sh
+hookrelay list --source github --limit 10   # add --json for the raw API response
+# ID  RECEIVED (UTC)        SOURCE  BYTES
+# 12  2026-10-30T20:42:19Z  github     14
+
+hookrelay replay 12 15
+# hook 12: queued as delivery 31
+# hook 15: server responded with 409 Conflict: source `stripe` has no forwarding target
+```
+
+`replay` exits non-zero if any replay failed. Over HTTP it's
+`curl -X POST localhost:8080/hooks/id/12/replay`.
 
 ## Roadmap
 
 - [x] **v0.1**: receive and store webhooks, list and inspect them
 - [x] **v0.2**: signature verification (GitHub `X-Hub-Signature-256`, Stripe `Stripe-Signature`)
 - [x] **v0.3**: forward to target URLs with exponential backoff and a dead-letter list
-- [ ] **v0.4**: replay endpoint plus `hookrelay list` / `hookrelay replay` CLI commands
+- [x] **v0.4**: replay endpoint plus `hookrelay list` / `hookrelay replay` CLI commands
 - [ ] Docker image (multi-stage, distroless)
 
 ## Development
