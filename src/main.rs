@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{io::IsTerminal, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -102,6 +102,8 @@ async fn main() -> anyhow::Result<()> {
         )
         // Keeps stdout for command output, e.g. `list --json | jq`.
         .with_writer(std::io::stderr)
+        // No color codes when piped or under Docker, where they garble log collectors.
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     match Cli::parse().command {
