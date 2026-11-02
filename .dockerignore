@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.claude/
+.direnv/
+.envrc
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
