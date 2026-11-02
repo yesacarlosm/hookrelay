@@ -26,8 +26,12 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
 - Keep comments sparse: explain *why*, not *what*.
 
 ## Layout
-- `src/main.rs`: clap CLI (`serve`, `list`, `replay`), tracing setup (logs go to stderr so
-  stdout stays clean for command output), graceful shutdown.
+- `src/main.rs`: clap CLI (`serve`, `list`, `replay`, `health`), tracing setup (logs go to
+  stderr so stdout stays clean for command output; no ANSI when not a TTY), graceful
+  shutdown on Ctrl-C or SIGTERM.
+- `Dockerfile`: builds on `rust:1-slim-trixie`, runs on `distroless/cc-debian13:nonroot`
+  (no shell: the health check is `hookrelay health`). `.github/workflows/release.yml`
+  runs on `v*` tags and checks that the tag matches the `Cargo.toml` version.
 - `src/lib.rs`: exports `router()` so integration tests can drive the app in-process.
 - `src/auth.rs`: `require_admin` middleware, applied with `route_layer` to the admin
   sub-router in `routes::router` (everything but `/health` and `POST /hooks/{source}`).
@@ -63,7 +67,8 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
    Per-source secrets from config/env. ✅
 3. v0.3: forwarding with `reqwest`, exponential backoff with jitter, dead-letter table. ✅
 4. v0.4: replay endpoint and `list`/`replay` CLI subcommands. ✅
-5. Dockerfile + release workflow.
+5. v0.5: distroless Dockerfile, `health` subcommand, tag-triggered release workflow
+   (GHCR image for amd64/arm64 plus binaries). ✅
 
 ## Skills to use (Claude Code)
 - `rust-best-practices`: when writing or reviewing Rust (ownership, errors, tests).

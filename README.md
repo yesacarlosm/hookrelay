@@ -26,6 +26,25 @@ curl localhost:8080/hooks?source=github  # newest first
 curl localhost:8080/hooks/id/1           # one hook, with headers and body
 ```
 
+## Docker
+
+Images for `linux/amd64` and `linux/arm64` are published to GitHub Container Registry on
+each release. They're distroless and run as a non-root user. Inside the container,
+hookrelay listens on `0.0.0.0:8080` and keeps its database in the `/data` volume.
+
+```sh
+docker run -d --name hookrelay -p 8080:8080 -v hookrelay-data:/data \
+  -e HOOKRELAY_ADMIN_TOKEN=$(openssl rand -hex 32) \
+  -e HOOKRELAY_SECRET_GITHUB=... -e HOOKRELAY_TARGET_GITHUB=https://my-service/github \
+  ghcr.io/yesacarlosm/hookrelay:0.5
+```
+
+Set an [admin token](#admin-token): the container is reachable beyond localhost. The
+image's health check runs `hookrelay health` against port 8080, so keep that port if
+you change `HOOKRELAY_ADDR`. `docker stop` shuts down gracefully: in-flight requests and
+forwarding attempts finish first. Prebuilt binaries for Linux and macOS are attached to
+each [GitHub release](https://github.com/yesacarlosm/hookrelay/releases).
+
 ## API
 
 | Method | Path               | Description                                         |
@@ -55,7 +74,7 @@ Everything except `/health` and `POST /hooks/{source}` is an admin endpoint: it 
 | `--retry-base-ms`         | `HOOKRELAY_RETRY_BASE_MS`        | `1000`                  |
 | `--retry-max-secs`        | `HOOKRELAY_RETRY_MAX_SECS`       | `3600`                  |
 |                           | `HOOKRELAY_ADMIN_TOKEN`          | unset (admin API open)  |
-| `--server` (`list`, `replay`) | `HOOKRELAY_SERVER`           | `http://127.0.0.1:8080` |
+| `--server` (`list`, `replay`, `health`) | `HOOKRELAY_SERVER` | `http://127.0.0.1:8080` |
 | `--token` (`list`, `replay`)  | `HOOKRELAY_ADMIN_TOKEN`      | unset                   |
 
 Logging is controlled by `RUST_LOG` (default `info`).
@@ -176,13 +195,16 @@ hookrelay replay 12 15
 `replay` exits non-zero if any replay failed. Over HTTP it's
 `curl -X POST localhost:8080/hooks/id/12/replay`.
 
+`hookrelay health` prints `ok` if the server answers `/health` and exits non-zero
+otherwise, which makes it usable as a health check where there's no `curl`.
+
 ## Roadmap
 
 - [x] **v0.1**: receive and store webhooks, list and inspect them
 - [x] **v0.2**: signature verification (GitHub `X-Hub-Signature-256`, Stripe `Stripe-Signature`)
 - [x] **v0.3**: forward to target URLs with exponential backoff and a dead-letter list
 - [x] **v0.4**: replay endpoint plus `hookrelay list` / `hookrelay replay` CLI commands
-- [ ] Docker image (multi-stage, distroless)
+- [x] **v0.5**: distroless Docker image on GHCR and release binaries, built on each tag
 
 ## Development
 
