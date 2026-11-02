@@ -203,7 +203,7 @@ async fn serve(
     ));
 
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
+        stop_requested().await;
         tracing::info!("shutting down");
         let _ = shutdown_tx.send(true);
     });
@@ -213,6 +213,27 @@ async fn serve(
         .await?;
     forwarder.await.context("forwarder task failed")?;
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM on Unix: that's what `docker stop` and Kubernetes send.
+async fn stop_requested() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(%err, "can't listen for SIGTERM, only Ctrl-C will stop the server")
+            }
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 async fn shutdown_signal(mut rx: watch::Receiver<bool>) {
