@@ -71,6 +71,11 @@ enum Command {
         #[arg(required = true)]
         ids: Vec<i64>,
     },
+    /// Check that a server is up; exits non-zero if not. Used as the Docker health check.
+    Health {
+        #[command(flatten)]
+        server: ServerArgs,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -158,6 +163,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             anyhow::ensure!(failed == 0, "{failed} replay(s) failed");
+            Ok(())
+        }
+        Command::Health { server } => {
+            server
+                .client()?
+                .health()
+                .await
+                .with_context(|| format!("{} is not healthy", server.server))?;
+            println!("ok");
             Ok(())
         }
     }

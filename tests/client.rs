@@ -81,4 +81,20 @@ async fn reports_an_unreachable_server() {
         .unwrap()
         .unwrap_err();
     assert!(matches!(err, ClientError::Http(_)), "{err:?}");
+
+    let err = tokio::time::timeout(Duration::from_secs(5), client.health())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(err, ClientError::Http(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn health_needs_no_admin_token() {
+    let base = server(Config::default().with_admin_token("s3cret")).await;
+    HookrelayClient::new(&base, None)
+        .unwrap()
+        .health()
+        .await
+        .unwrap();
 }

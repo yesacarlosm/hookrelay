@@ -89,6 +89,17 @@ impl HookrelayClient {
         send(self.http.get(url)).await
     }
 
+    /// Succeeds if the server answers `/health` with a success status.
+    pub async fn health(&self) -> Result<(), ClientError> {
+        let response = self.http.get(self.base.join("health")?).send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let message = response.text().await.unwrap_or_default();
+        Err(ClientError::Api { status, message })
+    }
+
     /// Queues hook `id` for redelivery and returns the new delivery's id.
     pub async fn replay(&self, id: i64) -> Result<i64, ClientError> {
         let url = self.base.join(&format!("hooks/id/{id}/replay"))?;
