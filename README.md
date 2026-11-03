@@ -1,17 +1,37 @@
 # hookrelay
 
 [![CI](https://github.com/yesacarlosm/hookrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/yesacarlosm/hookrelay/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/yesacarlosm/hookrelay)](https://github.com/yesacarlosm/hookrelay/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A small, self-hosted webhook relay written in Rust. Point any webhook provider at it,
-and hookrelay verifies its signature, stores every delivery so you can inspect it, and
+and hookrelay verifies the signature, stores every delivery so you can inspect it, and
 forwards it to your service, retrying until it gets through. Anything that still fails
-can be replayed later.
+lands in a dead-letter list and can be replayed once you've fixed the target.
 
 ```
- GitHub / Stripe / ...  ──POST──▶  hookrelay  ──▶  SQLite
-                                      │
-                                      └──────────▶  your service (with retries)
+ GitHub / Stripe / ...                                          your service
+        │                                                            ▲
+        │ POST /hooks/{source}                                       │ POST, retried with
+        ▼                                                            │ backoff + jitter
+  verify HMAC ──▶ store hook + queue delivery ──▶ SQLite ──▶ forwarder ──▶ dead-letter list
+                       (one transaction)            ▲
+                                                    │
+                          hookrelay list / replay (admin API)
 ```
+
+## Features
+
+- **Signature verification**: HMAC-SHA256 for GitHub (`X-Hub-Signature-256`) and Stripe
+  (`Stripe-Signature`, with timestamp tolerance), compared in constant time.
+- **Durable storage**: every accepted hook is kept in SQLite with its headers and body.
+- **Reliable forwarding**: exponential backoff with jitter, retrying only failures that
+  can recover, and a dead-letter list for the rest. The queue survives restarts.
+- **Replay**: resend any stored hook to its current target, from the API or the CLI.
+- **Admin token**: optional bearer token protecting everything except ingestion.
+- **Single binary CLI**: `serve`, `list`, `replay`, and `health` subcommands.
+- **Ready to deploy**: distroless, non-root multi-arch image on GHCR, graceful shutdown
+  on `SIGTERM`, and prebuilt binaries for Linux and macOS.
 
 ## Quick start
 
@@ -25,6 +45,10 @@ curl -X POST localhost:8080/hooks/github \
 curl localhost:8080/hooks?source=github  # newest first
 curl localhost:8080/hooks/id/1           # one hook, with headers and body
 ```
+
+Or install it with `cargo install --git https://github.com/yesacarlosm/hookrelay`, grab
+a binary from the [releases page](https://github.com/yesacarlosm/hookrelay/releases), or
+run the Docker image below.
 
 ## Docker
 
@@ -101,7 +125,7 @@ hookrelay list   # reads HOOKRELAY_ADMIN_TOKEN too
 Set `HOOKRELAY_SECRET_<SOURCE>` to turn on HMAC-SHA256 verification for a source.
 `<SOURCE>` is the source name in uppercase, with `-` written as `_`
 (`HOOKRELAY_SECRET_MY_APP` covers `/hooks/my-app` and `/hooks/my_app`).
-Sources without a secret are stored unverified, as in v0.1.
+Sources without a secret are stored unverified.
 
 | Scheme   | Header                                    | Signed payload    |
 |----------|-------------------------------------------|-------------------|
@@ -198,13 +222,33 @@ hookrelay replay 12 15
 `hookrelay health` prints `ok` if the server answers `/health` and exits non-zero
 otherwise, which makes it usable as a health check where there's no `curl`.
 
-## Roadmap
+## Design notes
 
-- [x] **v0.1**: receive and store webhooks, list and inspect them
-- [x] **v0.2**: signature verification (GitHub `X-Hub-Signature-256`, Stripe `Stripe-Signature`)
-- [x] **v0.3**: forward to target URLs with exponential backoff and a dead-letter list
-- [x] **v0.4**: replay endpoint plus `hookrelay list` / `hookrelay replay` CLI commands
-- [x] **v0.5**: distroless Docker image on GHCR and release binaries, built on each tag
+- **SQLite is the queue.** A hook and its pending delivery are written in the same
+  transaction, so a hook can't be stored without being queued (a transactional outbox).
+  There's no broker to run, and retries survive restarts.
+- **The worker is event-driven.** Inserts wake the forwarder through a `tokio::sync::Notify`;
+  otherwise it sleeps until the next retry is due instead of polling.
+- **Fail closed on config.** An unknown signature scheme or ambiguous source name stops
+  startup, so a typo can't silently turn verification off.
+- **Secrets stay secret.** Secrets have a redacted `Debug`, target URLs are only ever
+  logged by origin, and internal errors are logged rather than returned to clients.
+- **The CLI uses the API, not the database**, so the server stays the only owner of the
+  queue and the targets.
+
+## Project layout
+
+| Path               | What's there                                                  |
+|--------------------|---------------------------------------------------------------|
+| `src/main.rs`      | CLI (clap), tracing setup, graceful shutdown                  |
+| `src/routes.rs`    | axum handlers and router                                      |
+| `src/auth.rs`      | admin token middleware                                        |
+| `src/verify.rs`    | pure HMAC verification for each scheme                        |
+| `src/forward.rs`   | background forwarder: backoff, retry classification, headers  |
+| `src/db.rs`        | sqlx queries; schema in `migrations/`                         |
+| `src/config.rs`    | per-source secrets, schemes, and targets from the environment |
+| `src/client.rs`    | HTTP client behind `list`, `replay`, and `health`             |
+| `tests/`           | integration tests, including the real worker against a stub target |
 
 ## Development
 
@@ -212,6 +256,9 @@ otherwise, which makes it usable as a health check where there's no `curl`.
 cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
+CI runs the same checks and builds the Docker image on every push. Pushing a `v*` tag
+that matches the `Cargo.toml` version publishes the GHCR image and release binaries.
+
 ## License
 
-MIT
+[MIT](LICENSE)
