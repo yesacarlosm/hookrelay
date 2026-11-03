@@ -59,7 +59,7 @@ It has **no relation to Fincast**: never copy Fincast code, names, or infra here
   `tests/forwarding.rs` runs the real worker against a stub axum target on `127.0.0.1:0`;
   `tests/client.rs` serves the router on a real port to test the CLI client.
 
-## Roadmap (keep README in sync)
+## Roadmap (all shipped; the README lists features, not milestones: keep its Features section in sync)
 1. v0.1: receive/store/list/get ✅
 2. v0.2: HMAC-SHA256 signature verification (`hmac`, `sha2`, constant-time compare via
    `Mac::verify_slice`). GitHub: `X-Hub-Signature-256: sha256=<hex>`. Stripe:
