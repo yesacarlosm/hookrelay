@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN mkdir /data
 
 # cc: glibc and libgcc, which the binary links against. Everything else is static.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
 COPY --from=build /usr/local/bin/hookrelay /usr/local/bin/hookrelay
 COPY --from=build --chown=nonroot:nonroot /data /data
 VOLUME /data
